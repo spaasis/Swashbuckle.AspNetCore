@@ -35,6 +35,28 @@ namespace Swashbuckle.AspNetCore.Cli.Test
             }
         }
 
+        [Fact]
+        public void Can_Generate_Swagger_Json_For_All_Documents()
+        {
+            var dir = Directory.CreateDirectory(Path.Join(Path.GetTempPath(), Path.GetRandomFileName()));
+            try
+            {
+                var args = new string[] { "allToDirectory", "--outputDirectory", $"{dir}", "--serializeasv2", Path.Combine(Directory.GetCurrentDirectory(), "Basic.dll")};
+                Assert.Equal(0, Program.Main(args));
+
+                using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(dir.FullName, "swagger.json")));
+
+                // verify one of the endpoints
+                var paths = document.RootElement.GetProperty("paths");
+                var productsPath = paths.GetProperty("/products");
+                Assert.True(productsPath.TryGetProperty("post", out _));
+            }
+            finally
+            {
+                dir.Delete(true);
+            }
+        }
+
 #if NET6_0
         [Fact]
         public void Can_Generate_Swagger_Json_ForTopLevelApp()

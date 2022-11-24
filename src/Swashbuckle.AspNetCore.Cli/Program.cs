@@ -10,10 +10,11 @@ using Swashbuckle.AspNetCore.Swagger;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore;
 using Microsoft.Extensions.Hosting;
+using Swashbuckle.AspNetCore.SwaggerGen;
 
 namespace Swashbuckle.AspNetCore.Cli
 {
-    public class Program
+    public class BProgram
     {
         public static int Main(string[] args)
         {
@@ -112,6 +113,101 @@ namespace Swashbuckle.AspNetCore.Cli
 
                         if (outputPath != null)
                             Console.WriteLine($"Swagger JSON/YAML successfully written to {outputPath}");
+                    }
+
+                    return 0;
+                });
+            });
+
+                        // > dotnet swagger allToDirectory ...
+            runner.SubCommand("allToDirectory", "retrieves all Swagger documents from a startup assembly, and writes to directory ", c =>
+            {
+                c.Argument("startupassembly", "relative path to the application's startup assembly");
+                c.Option("--outputDirectory", "relative path where the Swagger will be output, defaults to stdout");
+                c.Option("--host", "a specific host to include in the Swagger output");
+                c.Option("--basepath", "a specific basePath to include in the Swagger output");
+                c.Option("--serializeasv2", "output Swagger in the V2 format rather than V3", true);
+                c.Option("--yaml", "exports swagger in a yaml format", true);
+                c.OnRun((namedArgs) =>
+                {
+                    if (!File.Exists(namedArgs["startupassembly"]))
+                        throw new FileNotFoundException(namedArgs["startupassembly"]);
+
+                    var depsFile = namedArgs["startupassembly"].Replace(".dll", ".deps.json");
+                    var runtimeConfig = namedArgs["startupassembly"].Replace(".dll", ".runtimeconfig.json");
+                    var commandName = args[0];
+
+                    var subProcessArguments = new string[args.Length - 1];
+                    if (subProcessArguments.Length > 0)
+                    {
+                        Array.Copy(args, 1, subProcessArguments, 0, subProcessArguments.Length);
+                    }
+
+                    var subProcessCommandLine = string.Format(
+                        "exec --depsfile {0} --runtimeconfig {1} {2} _{3} {4}", // note the underscore prepended to the command name
+                        EscapePath(depsFile),
+                        EscapePath(runtimeConfig),
+                        EscapePath(typeof(Program).GetTypeInfo().Assembly.Location),
+                        commandName,
+                        string.Join(" ", subProcessArguments.Select(x => EscapePath(x)))
+                    );
+
+                    var subProcess = Process.Start("dotnet", subProcessCommandLine);
+
+                    subProcess.WaitForExit();
+                    return subProcess.ExitCode;
+                });
+            });
+
+            // > dotnet swagger (_allToDirectory) ... (* should only be invoked via "dotnet exec")
+            runner.SubCommand("_allToDirectory", "", c =>
+            {
+                c.Argument("startupassembly", "");
+                c.Option("--outputDirectory", "");
+                c.Option("--host", "");
+                c.Option("--basepath", "");
+                c.Option("--serializeasv2", "", true);
+                c.Option("--yaml", "", true);
+                c.OnRun((namedArgs) =>
+                {
+                    // 1) Configure host with provided startupassembly
+                    var startupAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(
+                        Path.Combine(Directory.GetCurrentDirectory(), namedArgs["startupassembly"]));
+
+                    // 2) Build a service container that's based on the startup assembly
+                    var serviceProvider = GetServiceProvider(startupAssembly);
+
+                    // 3) Retrieve Swagger via configured provider
+                    var swaggerProvider = serviceProvider.GetRequiredService<ISwaggerProvider>();
+                    var options = serviceProvider.GetRequiredService<SwaggerGeneratorOptions>();
+                    var documents = options.SwaggerDocs.Select(d => d.Key);
+                    foreach (var document in documents) {
+                        var swagger = swaggerProvider.GetSwagger(
+                            document,
+                            namedArgs.ContainsKey("--host") ? namedArgs["--host"] : null,
+                            namedArgs.ContainsKey("--basepath") ? namedArgs["--basepath"] : null);
+
+                        // 4) Serialize to specified output location or stdout
+                        var outputPath = namedArgs.ContainsKey("--outputDirectory")
+                            ? Path.Combine(Directory.GetCurrentDirectory(), namedArgs["--outputDirectory"], $"swagger_{document}.json")
+                            : null;
+
+                        using (var streamWriter = (outputPath != null ? File.CreateText(outputPath) : Console.Out))
+                        {
+                            IOpenApiWriter writer;
+                            if (namedArgs.ContainsKey("--yaml"))
+                                writer = new OpenApiYamlWriter(streamWriter);
+                            else
+                                writer = new OpenApiJsonWriter(streamWriter);
+
+                            if (namedArgs.ContainsKey("--serializeasv2"))
+                                swagger.SerializeAsV2(writer);
+                            else
+                                swagger.SerializeAsV3(writer);
+
+                            if (outputPath != null)
+                                Console.WriteLine($"Swagger JSON/YAML successfully written to {outputPath}");
+                        }
                     }
 
                     return 0;
